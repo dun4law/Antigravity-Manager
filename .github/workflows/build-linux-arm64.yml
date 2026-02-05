@@ -1,0 +1,77 @@
+name: Build Linux ARM64
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-linux-arm64:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU for ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build ARM64 binary in emulated container
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            -e TAURI_SIGNING_PRIVATE_KEY="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" \
+            -e TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" \
+            ubuntu:22.04 bash -c '
+              set -ex
+
+              export DEBIAN_FRONTEND=noninteractive
+
+              apt-get update
+              apt-get install -y \
+                curl wget file build-essential pkg-config \
+                libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+                librsvg2-dev patchelf libssl-dev libsoup-3.0-dev \
+                javascriptcoregtk-4.1 libjavascriptcoregtk-4.1-dev \
+                libnm-dev xdg-utils ca-certificates
+
+              # Install Rust
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              . "$HOME/.cargo/env"
+
+              # Install Node.js 20
+              curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+              apt-get install -y nodejs
+
+              # Install frontend dependencies and build
+              npm install
+              npm run tauri build
+            '
+
+      - name: Upload updater json
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-json-linux-arm64
+          path: src-tauri/target/**/release/bundle/updater/*.json
+          if-no-files-found: warn
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Antigravity Tools ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          files: |
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/appimage/*.AppImage
+            src-tauri/target/**/release/bundle/rpm/*.rpm
+            src-tauri/target/**/release/bundle/**/*.sig
